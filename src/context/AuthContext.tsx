@@ -91,8 +91,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         if (session?.user) {
-          const profile = await fetchProfile(session.user.id);
-          setUser(profile);
+          try {
+            const profile = await Promise.race([
+              fetchProfile(session.user.id),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+            ]);
+            if (profile) setUser(profile);
+          } catch {
+            // 프로필 조회 실패해도 무시
+          }
         } else {
           setUser(null);
         }
@@ -105,46 +112,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signup(data: SignupData): Promise<{ success: boolean; error?: string }> {
     const email = phoneToEmail(data.phone);
 
-    // 1) signUp 시도
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email,
-      password: data.password,
-    });
+    try {
+      // 5초 타임아웃 래퍼
+      const withTimeout = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
+        Promise.race([
+          promise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("timeout")), ms)
+          ),
+        ]);
 
-    if (authError) {
-      if (authError.message.includes("rate limit")) {
-        return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
+      // 1) signUp (5초 제한)
+      const { data: authData, error: authError } = await withTimeout(
+        supabase.auth.signUp({ email, password: data.password }),
+        5000
+      );
+
+      if (authError) {
+        if (authError.message.includes("rate limit")) {
+          return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
+        }
+        if (authError.message.includes("already registered")) {
+          return { success: false, error: "이미 가입된 번호입니다. 로그인을 시도해주세요." };
+        }
+        return { success: false, error: authError.message };
       }
-      if (authError.message.includes("already registered")) {
+
+      if (!authData.user || (authData.user.identities && authData.user.identities.length === 0)) {
         return { success: false, error: "이미 가입된 번호입니다. 로그인을 시도해주세요." };
       }
-      return { success: false, error: authError.message };
+
+      const userId = authData.user.id;
+
+      // 2) 프로필 생성 - 기다리지 않음 (fire and forget)
+      supabase.from("profiles").upsert({
+        id: userId,
+        name: data.name,
+        birth_date: data.birthDate,
+        phone: data.phone,
+      }).then();
+
+      // 3) 바로 유저 세팅
+      setUser({
+        id: userId,
+        name: data.name,
+        birthDate: data.birthDate,
+        phone: data.phone,
+      });
+
+      return { success: true };
+    } catch (err) {
+      if (err instanceof Error && err.message === "timeout") {
+        return { success: false, error: "서버 응답이 느립니다. 잠시 후 다시 시도해주세요." };
+      }
+      return { success: false, error: "회원가입 중 오류가 발생했습니다." };
     }
-
-    // identities 비어있으면 이미 존재하는 유저
-    if (!authData.user || (authData.user.identities && authData.user.identities.length === 0)) {
-      return { success: false, error: "이미 가입된 번호입니다. 로그인을 시도해주세요." };
-    }
-
-    const userId = authData.user.id;
-
-    // 2) 프로필 생성 (실패해도 가입 자체는 완료)
-    await supabase.from("profiles").upsert({
-      id: userId,
-      name: data.name,
-      birth_date: data.birthDate,
-      phone: data.phone,
-    });
-
-    // 3) 바로 유저 세팅 (추가 조회 없이)
-    setUser({
-      id: userId,
-      name: data.name,
-      birthDate: data.birthDate,
-      phone: data.phone,
-    });
-
-    return { success: true };
   }
 
   async function login(
@@ -153,30 +175,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ): Promise<{ success: boolean; error?: string }> {
     const email = phoneToEmail(phone);
 
-    const { data: authData, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 5000)
+      );
 
-    if (error) {
-      if (error.message.includes("Invalid login") || error.message.includes("invalid_credentials")) {
-        return { success: false, error: "번호 또는 비밀번호가 일치하지 않습니다" };
+      const { data: authData, error } = await Promise.race([
+        supabase.auth.signInWithPassword({ email, password }),
+        timeoutPromise,
+      ]);
+
+      if (error) {
+        if (error.message.includes("Invalid login") || error.message.includes("invalid_credentials")) {
+          return { success: false, error: "번호 또는 비밀번호가 일치하지 않습니다" };
+        }
+        if (error.message.includes("Email not confirmed")) {
+          return { success: false, error: "이메일 인증이 필요합니다. 관리자에게 문의하세요" };
+        }
+        if (error.message.includes("rate limit")) {
+          return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
+        }
+        return { success: false, error: error.message };
       }
-      if (error.message.includes("Email not confirmed")) {
-        return { success: false, error: "이메일 인증이 필요합니다. 관리자에게 문의하세요" };
+
+      if (authData.user) {
+        // 프로필 조회도 타임아웃 (실패해도 기본값 사용)
+        try {
+          const profile = await Promise.race([
+            fetchProfile(authData.user.id),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+          ]);
+          setUser(profile || { id: authData.user.id, name: phone, birthDate: "", phone });
+        } catch {
+          setUser({ id: authData.user.id, name: phone, birthDate: "", phone });
+        }
       }
-      if (error.message.includes("rate limit")) {
-        return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
+
+      return { success: true };
+    } catch (err) {
+      if (err instanceof Error && err.message === "timeout") {
+        return { success: false, error: "서버 응답이 느립니다. 잠시 후 다시 시도해주세요." };
       }
-      return { success: false, error: error.message };
+      return { success: false, error: "로그인 중 오류가 발생했습니다." };
     }
-
-    if (authData.user) {
-      const profile = await fetchProfile(authData.user.id);
-      setUser(profile);
-    }
-
-    return { success: true };
   }
 
   async function updateProfile(
