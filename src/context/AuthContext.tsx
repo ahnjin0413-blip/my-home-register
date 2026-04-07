@@ -73,11 +73,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // 3초 안에 응답 없으면 로딩 해제
+    const timeout = setTimeout(() => setIsLoading(false), 3000);
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      clearTimeout(timeout);
       if (session?.user) {
         const profile = await fetchProfile(session.user.id);
         setUser(profile);
       }
+      setIsLoading(false);
+    }).catch(() => {
+      clearTimeout(timeout);
       setIsLoading(false);
     });
 
