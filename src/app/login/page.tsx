@@ -12,6 +12,7 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   function formatPhone(value: string): string {
     const nums = value.replace(/[^0-9]/g, "").slice(0, 11);
@@ -34,12 +35,19 @@ export default function LoginPage() {
       return;
     }
 
-    const result = await login(rawPhone, password);
+    setLoading(true);
+    try {
+      const result = await login(rawPhone, password);
 
-    if (result.success) {
-      router.push("/explore");
-    } else {
-      setError(result.error || "로그인에 실패했습니다");
+      if (result.success) {
+        router.push("/explore");
+      } else {
+        setError(result.error || "로그인에 실패했습니다");
+      }
+    } catch (err) {
+      setError("서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -97,9 +105,10 @@ export default function LoginPage() {
 
         <button
           type="submit"
-          className="w-full py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary-hover transition-colors"
+          disabled={loading}
+          className="w-full py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          로그인
+          {loading ? "로그인 중..." : "로그인"}
         </button>
 
         <p className="text-center text-sm text-gray-500">

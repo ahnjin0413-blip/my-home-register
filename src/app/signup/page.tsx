@@ -17,6 +17,7 @@ export default function SignupPage() {
     passwordConfirm: "",
   });
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   function updateField(field: string, value: string) {
     setForm({ ...form, [field]: value });
@@ -54,17 +55,24 @@ export default function SignupPage() {
       return;
     }
 
-    const result = await signup({
-      name: form.name.trim(),
-      birthDate: form.birthDate,
-      phone: form.phone.replace(/[^0-9]/g, ""),
-      password: form.password,
-    });
+    setLoading(true);
+    try {
+      const result = await signup({
+        name: form.name.trim(),
+        birthDate: form.birthDate,
+        phone: form.phone.replace(/[^0-9]/g, ""),
+        password: form.password,
+      });
 
-    if (result.success) {
-      router.push("/explore");
-    } else {
-      setError(result.error || "회원가입에 실패했습니다");
+      if (result.success) {
+        router.push("/explore");
+      } else {
+        setError(result.error || "회원가입에 실패했습니다");
+      }
+    } catch (err) {
+      setError("서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -157,9 +165,10 @@ export default function SignupPage() {
 
         <button
           type="submit"
-          className="w-full py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary-hover transition-colors"
+          disabled={loading}
+          className="w-full py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          가입하기
+          {loading ? "가입 처리 중..." : "가입하기"}
         </button>
 
         <p className="text-center text-sm text-gray-500">
