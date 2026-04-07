@@ -104,6 +104,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     if (authError) {
+      if (authError.message.includes("rate limit")) {
+        return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
+      }
       if (authError.message.includes("already registered")) {
         return { success: false, error: "이미 가입된 휴대폰 번호입니다" };
       }
@@ -112,6 +115,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!authData.user) {
       return { success: false, error: "회원가입에 실패했습니다" };
+    }
+
+    // Supabase는 Confirm email OFF 시 기존 유저를 에러 없이 반환함
+    // identities가 비어있으면 이미 존재하는 유저
+    if (
+      authData.user.identities &&
+      authData.user.identities.length === 0
+    ) {
+      return { success: false, error: "이미 가입된 휴대폰 번호입니다" };
     }
 
     // 프로필 생성
@@ -123,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     if (profileError) {
-      return { success: false, error: "프로필 생성에 실패했습니다" };
+      return { success: false, error: "프로필 생성에 실패했습니다: " + profileError.message };
     }
 
     setUser({
@@ -148,8 +160,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     if (error) {
-      if (error.message.includes("Invalid login")) {
+      if (error.message.includes("Invalid login") || error.message.includes("invalid_credentials")) {
         return { success: false, error: "번호 또는 비밀번호가 일치하지 않습니다" };
+      }
+      if (error.message.includes("Email not confirmed")) {
+        return { success: false, error: "이메일 인증이 필요합니다. 관리자에게 문의하세요" };
+      }
+      if (error.message.includes("rate limit")) {
+        return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
       }
       return { success: false, error: error.message };
     }
