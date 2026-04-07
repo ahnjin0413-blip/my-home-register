@@ -105,49 +105,71 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signup(data: SignupData): Promise<{ success: boolean; error?: string }> {
     const email = phoneToEmail(data.phone);
 
+    // 1) 먼저 signUp 시도
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password: data.password,
     });
 
+    let userId: string | null = null;
+
     if (authError) {
       if (authError.message.includes("rate limit")) {
         return { success: false, error: "잠시 후 다시 시도해주세요 (요청 한도 초과)" };
       }
+      // 이미 Auth에 유저가 있으면 → 로그인 시도
       if (authError.message.includes("already registered")) {
-        return { success: false, error: "이미 가입된 휴대폰 번호입니다" };
+        const { data: loginData, error: loginError } =
+          await supabase.auth.signInWithPassword({ email, password: data.password });
+        if (loginError) {
+          return { success: false, error: "이미 가입된 번호입니다. 로그인을 시도해주세요." };
+        }
+        userId = loginData.user?.id ?? null;
+      } else {
+        return { success: false, error: authError.message };
       }
-      return { success: false, error: authError.message };
+    } else if (authData.user) {
+      // identities가 비어있으면 이미 존재하는 유저 (Confirm email OFF 케이스)
+      if (authData.user.identities && authData.user.identities.length === 0) {
+        const { data: loginData, error: loginError } =
+          await supabase.auth.signInWithPassword({ email, password: data.password });
+        if (loginError) {
+          return { success: false, error: "이미 가입된 번호입니다. 로그인을 시도해주세요." };
+        }
+        userId = loginData.user?.id ?? null;
+      } else {
+        userId = authData.user.id;
+      }
     }
 
-    if (!authData.user) {
+    if (!userId) {
       return { success: false, error: "회원가입에 실패했습니다" };
     }
 
-    // Supabase는 Confirm email OFF 시 기존 유저를 에러 없이 반환함
-    // identities가 비어있으면 이미 존재하는 유저
-    if (
-      authData.user.identities &&
-      authData.user.identities.length === 0
-    ) {
-      return { success: false, error: "이미 가입된 휴대폰 번호입니다" };
-    }
+    // 2) 프로필이 있는지 확인
+    const { data: existingProfile } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", userId)
+      .single();
 
-    // 프로필 생성
-    const { error: profileError } = await supabase.from("profiles").insert({
-      id: authData.user.id,
-      name: data.name,
-      birth_date: data.birthDate,
-      phone: data.phone,
-    });
+    // 3) 프로필 없으면 생성
+    if (!existingProfile) {
+      const { error: profileError } = await supabase.from("profiles").insert({
+        id: userId,
+        name: data.name,
+        birth_date: data.birthDate,
+        phone: data.phone,
+      });
 
-    if (profileError) {
-      return { success: false, error: "프로필 생성에 실패했습니다: " + profileError.message };
+      if (profileError) {
+        return { success: false, error: "프로필 생성에 실패했습니다: " + profileError.message };
+      }
     }
 
     setUser({
-      id: authData.user.id,
-      name: data.name,
+      id: userId,
+      name: existingProfile ? (await fetchProfile(userId))?.name || data.name : data.name,
       birthDate: data.birthDate,
       phone: data.phone,
     });
